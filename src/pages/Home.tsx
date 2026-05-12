@@ -4,27 +4,42 @@ import { detectImage, detectVideo } from "../api";
 import UploadZone from "../components/UploadZone";
 import ConfidenceMeter from "../components/ConfidenceMeter";
 import VerdictBadge from "../components/VerdictBadge";
+import FrameChart from "../components/FrameChart";
 import { ResultSkeleton } from "../components/Skeleton";
-import { toast, ToastContainer } from "../components/Toast";
+import { toast } from "../components/Toast";
 import type { DetectionResult } from "../types";
 
 const IMAGE_TYPES = new Set(["image/jpeg", "image/png", "image/webp"]);
+
+const FEATURES = [
+  { icon: "?", label: "Image analysis", desc: "JPEG · PNG · WebP" },
+  { icon: "?", label: "Video analysis", desc: "MP4 · MOV · WebM" },
+  { icon: "?", label: "GradCAM heatmap", desc: "Visual explainability" },
+  { icon: "?", label: "Face-aware", desc: "OpenCV Haar detection" },
+];
+
+function copyToClipboard(text: string) {
+  navigator.clipboard.writeText(text).catch(() => {});
+}
 
 export default function Home() {
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState<DetectionResult | null>(null);
   const [preview, setPreview] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [fileInfo, setFileInfo] = useState<{ name: string; size: string } | null>(null);
+  const [copied, setCopied] = useState(false);
 
   async function handleFile(file: File) {
     setError(null);
     setResult(null);
+    setFileInfo({
+      name: file.name,
+      size: `${(file.size / 1024 / 1024).toFixed(2)} MB`,
+    });
 
-    if (IMAGE_TYPES.has(file.type)) {
-      setPreview(URL.createObjectURL(file));
-    } else {
-      setPreview(null);
-    }
+    if (IMAGE_TYPES.has(file.type)) setPreview(URL.createObjectURL(file));
+    else setPreview(null);
 
     setLoading(true);
     try {
@@ -33,7 +48,7 @@ export default function Home() {
         : await detectVideo(file);
       setResult(data);
       toast(
-        `Analysis complete — ${data.verdict.toUpperCase()}`,
+        `${data.verdict.toUpperCase()} — ${Math.round(data.fake_probability * 100)}% fake probability`,
         data.verdict === "fake" ? "error" : data.verdict === "real" ? "success" : "info"
       );
     } catch (err) {
@@ -45,105 +60,176 @@ export default function Home() {
     }
   }
 
+  function handleShare() {
+    if (!result) return;
+    const url = `${window.location.origin}/result/${result.id}`;
+    copyToClipboard(url);
+    setCopied(true);
+    toast("Result link copied to clipboard", "success");
+    setTimeout(() => setCopied(false), 2000);
+  }
+
+  async function handleDownloadHeatmap() {
+    if (!result?.gradcam_url) return;
+    const a = document.createElement("a");
+    a.href = result.gradcam_url;
+    a.download = `gradcam_${result.id}.png`;
+    a.click();
+  }
+
+  const verdictBg: Record<string, string> = {
+    fake: "border-red-500/30 bg-red-500/5",
+    real: "border-emerald-500/30 bg-emerald-500/5",
+    uncertain: "border-amber-500/30 bg-amber-500/5",
+  };
+
   return (
-    <div className="max-w-2xl mx-auto">
-      <div className="text-center mb-10">
-        <h1 className="text-3xl font-bold text-white mb-2">Deepfake Detection</h1>
-        <p className="text-gray-400">
-          Upload an image or video to analyze it for AI manipulation
+    <div className="space-y-10">
+      {/* Hero */}
+      <div className="text-center space-y-4 pt-4">
+        <div className="inline-flex items-center gap-2 bg-indigo-600/10 border border-indigo-500/20 rounded-full px-4 py-1.5 text-indigo-400 text-xs font-medium tracking-wide">
+          EfficientNet-B4 + GradCAM explainability
+        </div>
+        <h1 className="text-4xl sm:text-5xl font-bold text-white leading-tight">
+          Detect deepfakes<br />
+          <span className="text-indigo-400">in seconds</span>
+        </h1>
+        <p className="text-gray-400 max-w-md mx-auto text-sm leading-relaxed">
+          Upload an image or video. Our CNN classifier analyzes faces for AI manipulation
+          and shows you exactly where it found evidence.
         </p>
+        <div className="flex flex-wrap gap-2 justify-center pt-1">
+          {FEATURES.map((f) => (
+            <span key={f.label} className="text-xs bg-gray-800 border border-gray-700 text-gray-400 rounded-full px-3 py-1">
+              {f.label}
+            </span>
+          ))}
+        </div>
       </div>
 
-      <UploadZone onFile={handleFile} loading={loading} />
+      {/* Upload */}
+      <div className="max-w-2xl mx-auto space-y-3">
+        <UploadZone onFile={handleFile} loading={loading} label="Drop an image or video to analyze" />
 
-      {loading && <ResultSkeleton />}
+        {fileInfo && !loading && (
+          <div className="flex items-center justify-between text-xs text-gray-600 px-1">
+            <span className="truncate">{fileInfo.name}</span>
+            <span>{fileInfo.size}</span>
+          </div>
+        )}
+      </div>
+
+      {loading && (
+        <div className="max-w-2xl mx-auto">
+          <ResultSkeleton />
+        </div>
+      )}
 
       {error && !loading && (
-        <div className="mt-6 p-4 bg-red-900/30 border border-red-700 rounded-xl text-red-300 text-sm">
+        <div className="max-w-2xl mx-auto p-4 bg-red-900/20 border border-red-700/40 rounded-xl text-red-300 text-sm text-center">
           {error}
         </div>
       )}
 
       {result && !loading && (
-        <div className="mt-8 space-y-6">
-          <div className="bg-gray-900 border border-gray-800 rounded-xl p-6 space-y-5">
-            <div className="flex items-center justify-between">
+        <div className="max-w-2xl mx-auto">
+          <div className={`border rounded-2xl p-6 space-y-5 transition-all ${verdictBg[result.verdict]}`}>
+            {/* Header */}
+            <div className="flex items-start justify-between gap-4">
               <div>
-                <p className="text-xs text-gray-500 uppercase tracking-widest mb-1">Verdict</p>
+                <p className="text-xs text-gray-500 uppercase tracking-widest mb-2">Verdict</p>
                 <VerdictBadge verdict={result.verdict} large />
               </div>
-              <div className="text-right text-sm text-gray-500">
-                <p>{result.original_filename}</p>
+              <div className="text-right text-xs text-gray-500 space-y-0.5">
+                <p className="truncate max-w-[180px]">{result.original_filename}</p>
+                <p className="capitalize">{result.media_type}</p>
                 <p>{result.processing_time_ms}ms</p>
               </div>
             </div>
 
-            <ConfidenceMeter
-              fakeProb={result.fake_probability}
-              confidence={result.confidence}
-            />
+            <ConfidenceMeter fakeProb={result.fake_probability} confidence={result.confidence} />
 
-            <div className="grid grid-cols-2 gap-3 text-sm">
-              <div className="bg-gray-800 rounded-lg p-3">
-                <p className="text-gray-500 text-xs mb-0.5">Faces detected</p>
-                <p className="font-semibold">{result.faces_count}</p>
+            {/* Stats grid */}
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-sm">
+              {[
+                { label: "Faces", value: result.faces_count },
+                { label: "Face detected", value: result.face_detected ? "Yes" : "No" },
+                result.total_frames_analyzed !== undefined
+                  ? { label: "Frames", value: result.total_frames_analyzed }
+                  : null,
+                result.fake_frames_count !== undefined
+                  ? { label: "Suspicious", value: result.fake_frames_count }
+                  : null,
+              ]
+                .filter(Boolean)
+                .slice(0, 4)
+                .map((s: any) => (
+                  <div key={s.label} className="bg-gray-900/60 rounded-lg p-2.5 text-center">
+                    <p className="text-xs text-gray-500 mb-0.5">{s.label}</p>
+                    <p className="font-semibold">{s.value}</p>
+                  </div>
+                ))}
+            </div>
+
+            {/* Frame chart */}
+            {result.frame_scores && result.frame_scores.length > 0 && (
+              <div>
+                <p className="text-xs text-gray-500 uppercase tracking-widest mb-2">Frame scores</p>
+                <FrameChart scores={result.frame_scores} height={56} />
               </div>
-              <div className="bg-gray-800 rounded-lg p-3">
-                <p className="text-gray-500 text-xs mb-0.5">Media type</p>
-                <p className="font-semibold capitalize">{result.media_type}</p>
-              </div>
-              {result.total_frames_analyzed !== undefined && (
-                <div className="bg-gray-800 rounded-lg p-3">
-                  <p className="text-gray-500 text-xs mb-0.5">Frames analyzed</p>
-                  <p className="font-semibold">{result.total_frames_analyzed}</p>
+            )}
+
+            {/* Preview + GradCAM */}
+            <div className={`grid gap-3 ${preview && result.gradcam_url ? "grid-cols-2" : "grid-cols-1"}`}>
+              {preview && (
+                <div>
+                  <p className="text-xs text-gray-500 mb-1">Preview</p>
+                  <img src={preview} alt="Uploaded" className="w-full rounded-xl max-h-48 object-cover" />
                 </div>
               )}
-              {result.fake_frames_count !== undefined && (
-                <div className="bg-gray-800 rounded-lg p-3">
-                  <p className="text-gray-500 text-xs mb-0.5">Suspicious frames</p>
-                  <p className="font-semibold text-red-400">{result.fake_frames_count}</p>
+              {result.gradcam_url && (
+                <div>
+                  <p className="text-xs text-gray-500 mb-1">GradCAM heatmap</p>
+                  <img src={result.gradcam_url} alt="GradCAM" className="w-full rounded-xl max-h-48 object-cover" />
                 </div>
               )}
             </div>
 
-            {preview && (
-              <div>
-                <p className="text-xs text-gray-500 uppercase tracking-widest mb-2">Preview</p>
-                <img
-                  src={preview}
-                  alt="Uploaded media"
-                  className="w-full rounded-lg max-h-64 object-cover"
-                />
-              </div>
-            )}
-
-            {result.gradcam_url && (
-              <div>
-                <p className="text-xs text-gray-500 uppercase tracking-widest mb-2">
-                  GradCAM Heatmap
-                </p>
-                <img
-                  src={result.gradcam_url}
-                  alt="GradCAM heatmap"
-                  className="w-full rounded-lg max-h-64 object-cover"
-                />
-                <p className="text-xs text-gray-600 mt-1">
-                  Red regions indicate areas that most influenced the model decision
-                </p>
-              </div>
-            )}
-
-            <Link
-              to={`/result/${result.id}`}
-              className="block text-center text-sm text-brand-500 hover:text-brand-600 font-medium"
-            >
-              View full analysis details
-            </Link>
+            {/* Actions */}
+            <div className="flex flex-wrap gap-2 pt-1 border-t border-gray-800">
+              <Link
+                to={`/result/${result.id}`}
+                className="text-sm text-indigo-400 hover:text-indigo-300 font-medium transition-colors"
+              >
+                Full details
+              </Link>
+              <button
+                onClick={handleShare}
+                className="text-sm text-gray-400 hover:text-gray-200 font-medium transition-colors"
+              >
+                {copied ? "Copied!" : "Share link"}
+              </button>
+              {result.gradcam_url && (
+                <button
+                  onClick={handleDownloadHeatmap}
+                  className="text-sm text-gray-400 hover:text-gray-200 font-medium transition-colors"
+                >
+                  Download heatmap
+                </button>
+              )}
+            </div>
           </div>
         </div>
       )}
 
-      <ToastContainer />
+      {/* Bottom links */}
+      {!result && !loading && (
+        <div className="flex flex-wrap gap-6 justify-center text-sm text-gray-600">
+          <Link to="/compare" className="hover:text-gray-400 transition-colors">Compare two files</Link>
+          <Link to="/webcam" className="hover:text-gray-400 transition-colors">Use webcam</Link>
+          <Link to="/about" className="hover:text-gray-400 transition-colors">How it works</Link>
+        </div>
+      )}
     </div>
   );
 }
